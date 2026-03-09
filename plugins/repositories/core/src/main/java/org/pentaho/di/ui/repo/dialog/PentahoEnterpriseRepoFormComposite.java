@@ -15,6 +15,9 @@
 package org.pentaho.di.ui.repo.dialog;
 
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.events.SelectionAdapter;
+import org.eclipse.swt.events.SelectionEvent;
+import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Label;
@@ -30,6 +33,8 @@ import java.util.Map;
 public class PentahoEnterpriseRepoFormComposite extends BaseRepoFormComposite {
 
   private Text txtUrl;
+  private Button radioUsernamePassword;
+  private Button radioSSO;
 
 
   public PentahoEnterpriseRepoFormComposite( Composite parent, int style ) {
@@ -52,7 +57,39 @@ public class PentahoEnterpriseRepoFormComposite extends BaseRepoFormComposite {
     txtUrl.addModifyListener( lsMod );
     props.setLook( txtUrl );
 
-    return txtUrl;
+    // Authentication method radio buttons
+    Label lAuthMethod = new Label( this, SWT.NONE );
+    lAuthMethod.setText( "Authentication Method" );
+    lAuthMethod.setLayoutData(
+      new FormDataBuilder().left( 0, 0 ).right( 100, 0 ).top( txtUrl, CONTROL_MARGIN ).result() );
+    props.setLook( lAuthMethod );
+
+    radioUsernamePassword = new Button( this, SWT.RADIO );
+    radioUsernamePassword.setText( "Username and Password" );
+    radioUsernamePassword.setLayoutData(
+      new FormDataBuilder().left( 0, 0 ).top( lAuthMethod, LABEL_CONTROL_MARGIN ).result() );
+    radioUsernamePassword.setSelection( true );
+    radioUsernamePassword.addSelectionListener( new SelectionAdapter() {
+      @Override
+      public void widgetSelected( SelectionEvent e ) {
+        lsMod.modifyText( null );
+      }
+    } );
+    props.setLook( radioUsernamePassword );
+
+    radioSSO = new Button( this, SWT.RADIO );
+    radioSSO.setText( "Single Sign On (via default browser)" );
+    radioSSO.setLayoutData(
+      new FormDataBuilder().left( 0, 0 ).top( radioUsernamePassword, LABEL_CONTROL_MARGIN ).result() );
+    radioSSO.addSelectionListener( new SelectionAdapter() {
+      @Override
+      public void widgetSelected( SelectionEvent e ) {
+        lsMod.modifyText( null );
+      }
+    } );
+    props.setLook( radioSSO );
+
+    return radioSSO;
   }
 
   @Override
@@ -62,6 +99,7 @@ public class PentahoEnterpriseRepoFormComposite extends BaseRepoFormComposite {
     ret.put( BaseRepositoryMeta.ID, "PentahoEnterpriseRepository" );
 
     ret.put( "url", txtUrl.getText() );
+    ret.put( "authMethod", radioSSO.getSelection() ? "SSO" : "USERNAME_PASSWORD" );
 
     return ret;
   }
@@ -73,6 +111,16 @@ public class PentahoEnterpriseRepoFormComposite extends BaseRepoFormComposite {
     super.populate( source );
     txtUrl.setText( (String) source.getOrDefault( "url", "http://localhost:8080/pentaho" ) );
     props.setLook( txtUrl );
+    
+    // Set authentication method
+    String authMethod = (String) source.getOrDefault( "authMethod", "USERNAME_PASSWORD" );
+    if ( "SSO".equals( authMethod ) ) {
+      radioSSO.setSelection( true );
+      radioUsernamePassword.setSelection( false );
+    } else {
+      radioUsernamePassword.setSelection( true );
+      radioSSO.setSelection( false );
+    }
   }
 
   @Override

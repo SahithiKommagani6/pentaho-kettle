@@ -34,6 +34,7 @@ import org.pentaho.di.core.plugins.StepPluginType;
 import org.pentaho.di.core.row.RowMetaInterface;
 import org.pentaho.di.core.row.ValueMetaInterface;
 import org.pentaho.di.core.variables.Variables;
+import org.pentaho.di.core.variables.VariableSpace;
 import org.pentaho.di.core.xml.XMLHandler;
 import org.pentaho.di.i18n.BaseMessages;
 import org.pentaho.di.job.JobMeta;
@@ -75,7 +76,16 @@ public class SpoonDBDelegate extends SpoonSharedObjectDelegate<DatabaseMeta> {
 
   public void editConnection( DatabaseManagementInterface dbManager, DatabaseMeta databaseMeta ) {
     String originalName = databaseMeta.getName();
-    databaseMeta.initializeVariablesFrom( spoon.getADefaultVariableSpace() );
+    try {
+      VariableSpace variableSpace = spoon.getADefaultVariableSpace();
+      if ( variableSpace != null ) {
+        databaseMeta.initializeVariablesFrom( variableSpace );
+      }
+    } catch ( Exception e ) {
+      // If variable space initialization fails, log and continue with existing variables
+      spoon.getLog().logDebug( "Could not initialize variables for database connection edit: " + e.getMessage() );
+    }
+    
     getDatabaseDialog().setDatabaseMeta( databaseMeta );
     if ( getDatabaseDialog().getDatabaseMeta() == null ) {
       return;
@@ -118,6 +128,31 @@ public class SpoonDBDelegate extends SpoonSharedObjectDelegate<DatabaseMeta> {
     return databaseDialog;
   }
 
+  /**
+   * Reset the cached database dialog. Call this after session recovery to clear stale references.
+   */
+  public void resetDatabaseDialog() {
+    databaseDialog = null;
+  }
+
+  /**
+   * Safely initializes variables for a database connection from the current variable space.
+   * If initialization fails, logs a debug message and continues.
+   *
+   * @param databaseMeta the database meta to initialize variables for
+   */
+  private void initializeDatabaseVariables( DatabaseMeta databaseMeta ) {
+    try {
+      VariableSpace variableSpace = spoon.getADefaultVariableSpace();
+      if ( variableSpace != null ) {
+        databaseMeta.initializeVariablesFrom( variableSpace );
+      }
+    } catch ( Exception e ) {
+      // If variable space initialization fails, log and continue with existing variables
+      spoon.getLog().logDebug( "Could not initialize variables for database connection: " + e.getMessage() );
+    }
+  }
+
   public void dupeConnection( DatabaseMeta databaseMeta, DatabaseManagementInterface dbManager ) {
     try {
       List<DatabaseMeta> databaseMetas = dbManager.getAll();
@@ -132,8 +167,8 @@ public class SpoonDBDelegate extends SpoonSharedObjectDelegate<DatabaseMeta> {
       // clear the objectId from the cloned databaseMeta
       databaseMetaCopy.setObjectId( null );
 
+      initializeDatabaseVariables( databaseMetaCopy );
 
-      databaseMetaCopy.initializeVariablesFrom( spoon.getADefaultVariableSpace() );
       getDatabaseDialog().setDatabaseMeta( databaseMetaCopy );
       if ( getDatabaseDialog().getDatabaseMeta() == null ) {
         return;
@@ -464,21 +499,34 @@ public class SpoonDBDelegate extends SpoonSharedObjectDelegate<DatabaseMeta> {
 
   public void newConnection( ) {
     DatabaseMeta databaseMeta = new DatabaseMeta();
-    databaseMeta.initializeVariablesFrom( spoon.getADefaultVariableSpace() );
+    try {
+      VariableSpace variableSpace = spoon.getADefaultVariableSpace();
+      if ( variableSpace != null ) {
+        databaseMeta.initializeVariablesFrom( variableSpace );
+      } else {
+        spoon.getLog().logDebug( "Variable space is null when creating new database connection" );
+      }
+    } catch ( Exception e ) {
+      // If variable space initialization fails, log and continue with empty variables
+      spoon.getLog().logDebug( "Could not initialize variables for new database connection: " + e.getMessage() );
+    }
+    
     getDatabaseDialog().setDatabaseMeta( databaseMeta );
     try {
       DatabaseManagementInterface databaseManagementInterface = spoon.getManagementBowl().getManager( DatabaseManagementInterface.class );
       getDatabaseDialog().setDatabases( databaseManagementInterface.getAll() );
-      String con_name = getDatabaseDialog().open();
-      if ( !Utils.isEmpty( con_name ) ) {
-        con_name = con_name.trim();
-        databaseMeta.setName( con_name );
-        databaseMeta.setDisplayName( con_name );
+      
+      String conName = null;
+      conName = openDatabaseDialogSafely();
+      if ( !Utils.isEmpty( conName ) ) {
+        conName = conName.trim();
+        databaseMeta.setName( conName );
+        databaseMeta.setDisplayName( conName );
         databaseMeta = getDatabaseDialog().getDatabaseMeta();
 
-        if ( DatabaseMeta.findDatabase( databaseManagementInterface.getAll(), con_name ) == null ) {
+        if ( DatabaseMeta.findDatabase( databaseManagementInterface.getAll(), conName ) == null ) {
           databaseManagementInterface.add( databaseMeta );
-          spoon.refreshDbConnection( con_name );
+          spoon.refreshDbConnection( conName );
           refreshTree();
         } else {
           DatabaseDialog.showDatabaseExistsDialog( spoon.getShell(), databaseMeta );
@@ -488,6 +536,21 @@ public class SpoonDBDelegate extends SpoonSharedObjectDelegate<DatabaseMeta> {
       new ErrorDialog( spoon.getShell(),
                        BaseMessages.getString( PKG, "Spoon.Dialog.ErrorSavingConnection.Title" ),
                        BaseMessages.getString( PKG, "Spoon.Dialog.ErrorSavingConnection.Message", databaseMeta.getName() ), exception );
+    }
+  }
+
+  /**
+   * Opens the database dialog safely, catching NullPointerException and resetting the dialog on error.
+   *
+   * @return the connection name entered by the user, or null if dialog was cancelled
+   * @throws NullPointerException if an error occurs while opening the dialog
+   */
+  private String openDatabaseDialogSafely() throws NullPointerException {
+    try {
+      return getDatabaseDialog().open();
+    } catch ( NullPointerException npe ) {
+      resetDatabaseDialog();
+      throw npe;
     }
   }
 

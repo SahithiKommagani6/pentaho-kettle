@@ -36,6 +36,7 @@ import org.pentaho.di.ui.core.dialog.ErrorDialog;
 import org.pentaho.di.ui.repository.dialog.RepositoryDialogInterface;
 import org.pentaho.di.ui.repository.dialog.RepositoryDialogInterface.MODE;
 import org.pentaho.di.ui.repository.model.RepositoriesModel;
+import org.pentaho.di.ui.spoon.session.AuthenticationContext;
 import org.pentaho.ui.xul.XulComponent;
 import org.pentaho.ui.xul.components.XulConfirmBox;
 import org.pentaho.ui.xul.dom.Document;
@@ -257,7 +258,13 @@ public class RepositoriesHelper {
         PluginRegistry.getInstance().loadClass(
           RepositoryPluginType.class, repositoryMeta.getId(), Repository.class );
       repository.init( repositoryMeta );
-      repository.connect( model.getUsername(), model.getPassword() );
+
+      String authCredential = model.getPassword();
+      if ( AuthenticationContext.SESSION_AUTH_TOKEN.equals( authCredential ) ) {
+        log.logBasic( "Connecting to repository using browser-based session authentication" );
+      }
+
+      repository.connect( model.getUsername(), authCredential );
       props.setLastRepository( repositoryMeta.getName() );
       props.setLastRepositoryLogin( model.getUsername() );
     } else {

@@ -13,17 +13,23 @@
 
 package org.pentaho.di.ui.repository.controllers;
 
+import java.lang.reflect.Method;
 import java.util.ResourceBundle;
+import java.util.concurrent.CompletableFuture;
 
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 import org.pentaho.di.i18n.BaseMessages;
 import org.pentaho.di.repository.RepositoryMeta;
+import org.pentaho.di.ui.repo.service.BrowserAuthenticationService;
 import org.pentaho.di.ui.repository.ILoginCallback;
 import org.pentaho.di.ui.repository.RepositoriesHelper;
 import org.pentaho.di.ui.repository.dialog.RepositoryDialogInterface;
 import org.pentaho.di.ui.repository.model.RepositoriesModel;
 import org.pentaho.di.ui.repository.repositoryexplorer.ControllerInitializationException;
+import org.pentaho.di.ui.spoon.Spoon;
+import org.pentaho.di.ui.spoon.session.AuthenticationContext;
+import org.pentaho.di.ui.spoon.session.SpoonSessionManager;
 import org.pentaho.di.ui.xul.KettleWaitBox;
 import org.pentaho.ui.xul.XulException;
 import org.pentaho.ui.xul.binding.Binding;
@@ -42,6 +48,8 @@ import org.pentaho.ui.xul.impl.AbstractXulEventHandler;
 public class RepositoriesController extends AbstractXulEventHandler {
 
   private static Class<?> PKG = RepositoryDialogInterface.class; // for i18n purposes, needed by Translator2!!
+
+  private static final String DIALOG_ERROR = "Dialog.Error";
 
   private ResourceBundle messages;
 
@@ -192,6 +200,14 @@ public class RepositoriesController extends AbstractXulEventHandler {
     if ( loginModel.isValid() == false ) {
       return;
     }
+
+    // Check if the selected repository supports browser-based authentication
+    if ( isBrowserBasedAuth() ) {
+      loginWithBrowser();
+      return;
+    }
+
+    // Traditional username/password authentication
     KettleWaitBox box;
     try {
       box = (KettleWaitBox) document.createElement( "iconwaitbox" );
@@ -339,5 +355,119 @@ public class RepositoriesController extends AbstractXulEventHandler {
 
   public Shell getShell() {
     return shell;
+  }
+
+  /**
+   * Checks if the selected repository uses browser-based authentication (SSO).
+   *
+   * @return true if browser-based authentication is required, false otherwise
+   */
+  private boolean isBrowserBasedAuth() {
+    RepositoryMeta selectedRepo = loginModel.getSelectedRepository();
+    if ( selectedRepo == null ) {
+      return false;
+    }
+
+    try {
+      // Check if repository is Pentaho Enterprise Repository with SSO authentication
+      if ( "PentahoEnterpriseRepository".equals( selectedRepo.getId() ) ) {
+        // Use reflection to get authMethod from repository metadata
+        Method getAuthMethod = selectedRepo.getClass().getMethod( "getAuthMethod" );
+        String authMethod = (String) getAuthMethod.invoke( selectedRepo );
+        return "SSO".equals( authMethod );
+      }
+    } catch ( Exception e ) {
+      return false;
+    }
+
+    return false;
+  }
+
+  /**
+   * Performs browser-based authentication flow.
+   * Delegates to {@link BrowserAuthenticationService} for browser/callback handling,
+   * then stores the session and completes the repository login on the UI thread.
+   */
+  private void loginWithBrowser() {
+    final Shell loginShell = (Shell) loginDialog.getRootObject();
+    final Display display = loginShell.getDisplay();
+
+    try {
+      String serverUrl = getServerUrl( loginModel.getSelectedRepository() );
+      if ( serverUrl == null || serverUrl.trim().isEmpty() ) {
+        getMessageBox().setTitle( BaseMessages.getString( PKG, DIALOG_ERROR ) );
+        getMessageBox().setMessage( "Server URL is not configured for browser-based authentication." );
+        getMessageBox().open();
+        return;
+      }
+
+      loginDialog.hide();
+      okButton.setDisabled( true );
+      cancelButton.setDisabled( true );
+
+      BrowserAuthenticationService authService = new BrowserAuthenticationService();
+      CompletableFuture<BrowserAuthenticationService.SessionInfo> future = authService.authenticate( serverUrl );
+
+      future.thenAccept( sessionInfo ->
+        display.asyncExec( () -> {
+          try {
+            AuthenticationContext authContext =
+              SpoonSessionManager.getInstance().getAuthenticationContext( serverUrl );
+            authContext.storeJSessionId( sessionInfo.getJsessionId() );
+
+            loginModel.setUsername( sessionInfo.getUsername() );
+            loginModel.setPassword( AuthenticationContext.SESSION_AUTH_TOKEN );
+
+            helper.loginToRepository();
+
+            okButton.setDisabled( false );
+            cancelButton.setDisabled( false );
+
+            if ( helper.getConnectedRepository().getConnectMessage() != null ) {
+              getMessageBox().setTitle( BaseMessages.getString( PKG, "ConnectMessageTitle" ) );
+              getMessageBox().setMessage( helper.getConnectedRepository().getConnectMessage() );
+              getMessageBox().open();
+            }
+
+            getCallback().onSuccess( helper.getConnectedRepository() );
+
+          } catch ( final Exception th ) {
+            getCallback().onError( th );
+            okButton.setDisabled( false );
+            cancelButton.setDisabled( false );
+            loginDialog.show();
+          }
+        } )
+      ).exceptionally( error -> {
+        display.asyncExec( () -> {
+          getMessageBox().setTitle( BaseMessages.getString( PKG, DIALOG_ERROR ) );
+          String msg = error instanceof java.util.concurrent.TimeoutException
+            ? "Authentication timed out. Please try again."
+            : "Browser authentication failed: " + error.getMessage();
+          getMessageBox().setMessage( msg );
+          getMessageBox().open();
+
+          loginDialog.show();
+          okButton.setDisabled( false );
+          cancelButton.setDisabled( false );
+        } );
+        return null;
+      } );
+
+    } catch ( Exception e ) {
+      getMessageBox().setTitle( BaseMessages.getString( PKG, DIALOG_ERROR ) );
+      getMessageBox().setMessage( "Failed to initiate browser authentication: " + e.getMessage() );
+      getMessageBox().open();
+      loginDialog.show();
+      okButton.setDisabled( false );
+      cancelButton.setDisabled( false );
+    }
+  }
+
+  /**
+   * Gets the server URL from repository metadata using reflection.
+   */
+  private String getServerUrl( RepositoryMeta repositoryMeta ) {
+    return Spoon.getServerUrl( repositoryMeta );
   }
 }

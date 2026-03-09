@@ -15,13 +15,17 @@ package org.pentaho.di.ui.repository.repositoryexplorer.controllers;
 
 import java.util.List;
 import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.swt.widgets.Shell;
 import org.pentaho.di.i18n.BaseMessages;
+import org.pentaho.di.core.logging.KettleLogStore;
+import org.pentaho.di.core.logging.LogChannelInterface;
 import org.pentaho.di.repository.KettleRepositoryLostException;
 import org.pentaho.di.repository.Repository;
 import org.pentaho.di.ui.core.dialog.ErrorDialog;
 import org.pentaho.di.ui.repository.dialog.RepositoryExplorerDialog;
+import org.pentaho.di.ui.repository.exception.RepositoryExceptionUtils;
 import org.pentaho.di.ui.repository.repositoryexplorer.RepositoryExplorerCallback;
 import org.pentaho.di.ui.spoon.SharedObjectSyncUtil;
 import org.pentaho.di.ui.spoon.Spoon;
@@ -42,6 +46,8 @@ import org.pentaho.ui.xul.util.DialogController;
 public class MainController extends AbstractXulEventHandler implements DialogController<Object> {
 
   private static Class<?> PKG = RepositoryExplorerDialog.class; // for i18n purposes, needed by Translator2!!
+  private static final LogChannelInterface log =
+    KettleLogStore.getLogChannelInterfaceFactory().create( MainController.class );
 
   private RepositoryExplorerCallback callback;
 
@@ -62,6 +68,13 @@ public class MainController extends AbstractXulEventHandler implements DialogCon
   BindingFactory bf;
 
   private boolean aborting = false;
+
+  /**
+   * Prevents re-entrant session-expiry dialogs. If reconnection is already in progress
+   * (e.g. a retry lambda fires another 401) this flag causes the second call to return
+   * false immediately so no second dialog is shown.
+   */
+  private final AtomicBoolean isHandlingSessionExpiry = new AtomicBoolean( false );
 
   private SharedObjectSyncUtil sharedObjectSyncUtil;
 
@@ -148,6 +161,11 @@ public class MainController extends AbstractXulEventHandler implements DialogCon
   }
 
   public boolean handleLostRepository( Throwable e ) {
+    // First check if this is a session expiry - handle it differently
+    if ( isSessionExpired( e ) ) {
+      return handleSessionExpiry( e );
+    }
+
     KettleRepositoryLostException repLost = KettleRepositoryLostException.lookupStackStrace( e );
     try {
       if ( repLost != null ) {
@@ -169,6 +187,78 @@ public class MainController extends AbstractXulEventHandler implements DialogCon
     }
 
     return false;
+  }
+
+  /**
+   * Handles session expiry by prompting for re-authentication
+   * Does NOT close the dialog or disconnect repository
+   * @param e The session expiry exception
+   * @return true if session expiry was handled, false otherwise
+   */
+  public boolean handleSessionExpiry( Throwable e ) {
+    if ( !isSessionExpired( e ) ) {
+      return false;
+    }
+    // If we are already handling a session expiry (e.g. a retry lambda inside retryOrThrow
+    // fires another 401) return false so no second dialog is opened.
+    if ( !isHandlingSessionExpiry.compareAndSet( false, true ) ) {
+      return false;
+    }
+    try {
+      log.logBasic( "Session expired detected: " + e.getMessage() );
+      final Spoon spoon = Spoon.getInstance();
+      if ( spoon == null ) {
+        log.logBasic( "Spoon instance not available, closing dialog" );
+        closeDialogIfCallback();
+        return true;
+      }
+      if ( tryReconnectOnUiThread( spoon ) ) {
+        onReconnectSuccess( spoon );
+      } else {
+        log.logBasic( "User cancelled reconnection, closing repository explorer" );
+        closeDialogIfCallback();
+      }
+      return true;
+    } catch ( Exception ex ) {
+      log.logError( "Error handling session expiry: " + ex.getMessage() );
+      return false;
+    } finally {
+      isHandlingSessionExpiry.set( false );
+    }
+  }
+
+  private boolean tryReconnectOnUiThread( Spoon spoon ) {
+    final boolean[] reconnected = { false };
+    shell.getDisplay().syncExec( () -> {
+      try {
+        reconnected[0] = spoon.handleSessionExpiryWithRelogin();
+      } catch ( Exception ex ) {
+        log.logError( "Error during re-authentication: " + ex.getMessage() );
+      }
+    } );
+    return reconnected[0];
+  }
+
+  private void onReconnectSuccess( Spoon spoon ) {
+    log.logBasic( "Successfully reconnected, repository explorer can continue" );
+    if ( spoon.getRepository() != null ) {
+      log.logBasic( "Updating repository reference in MainController" );
+      this.repository = spoon.getRepository();
+    }
+  }
+
+  private void closeDialogIfCallback() throws Exception {
+    if ( callback != null && callback.error( null ) ) {
+      closeDialog();
+    }
+  }
+
+  /**
+   * Checks if an exception indicates that the session has expired.
+   * Delegates to centralized RepositoryExceptionUtils for consistent exception handling.
+   */
+  private boolean isSessionExpired( Throwable throwable ) {
+    return RepositoryExceptionUtils.isSessionExpired( throwable );
   }
 
   public SharedObjectSyncUtil getSharedObjectSyncUtil() {

@@ -353,25 +353,44 @@ public class RepositoryConnectController implements IConnectedRepositoryInstance
   }
 
   public void connectToRepository( RepositoryMeta repositoryMeta, String username, String password ) throws KettleException {
-    final Repository repository = loadRepositoryObject( repositoryMeta.getId() );
-    repository.init( repositoryMeta );
-    repository.connect( username, password );
-    if ( username != null ) {
-      getPropsUI().setLastRepositoryLogin( username );
-    }
-    Spoon spoon = spoonSupplier.get();
-    if ( spoon.getRepository() != null ) {
-        spoon.closeRepository();
+    boolean isRelogin = this.relogin;
+
+    try {
+      final Repository repository = loadRepositoryObject( repositoryMeta.getId() );
+      repository.init( repositoryMeta );
+      repository.connect( username, password );
+      if ( username != null ) {
+        getPropsUI().setLastRepositoryLogin( username );
+      }
+      Spoon spoon = spoonSupplier.get();
+      if ( spoon.getRepository() != null ) {
+        if ( isRelogin ) {
+          // During relogin, disconnect silently without prompting to close files
+          try {
+            spoon.getRepository().disconnect();
+          } catch ( Exception e ) {
+            log.logDebug( "Error disconnecting old repository during relogin", e );
+          }
+        } else {
+          spoon.closeRepository();
+        }
         callRepositoryChangingEP( repository );
-    } else {
+      } else {
         callRepositoryChangingEP( repository );
-        spoon.closeAllJobsAndTransformations( true );
+        if ( !isRelogin ) {
+          spoon.closeAllJobsAndTransformations( true );
+        }
+      }
+      spoon.setRepository( repository );
+      setConnectedRepository( repositoryMeta );
+      fireListeners();
+      spoon.forceRefreshTree();
+      spoon.clearRepositoryDirectory();
+    } finally {
+      if ( isRelogin ) {
+        this.relogin = false;
+      }
     }
-    spoon.setRepository( repository );
-    setConnectedRepository( repositoryMeta );
-    fireListeners();
-    spoon.forceRefreshTree();
-    spoon.clearRepositoryDirectory();
   }
 
   private void callRepositoryChangingEP( Repository rep ) {

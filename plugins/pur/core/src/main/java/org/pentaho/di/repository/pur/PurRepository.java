@@ -46,6 +46,7 @@ import org.pentaho.di.repository.IRepositoryExporter;
 import org.pentaho.di.repository.IRepositoryImporter;
 import org.pentaho.di.repository.IRepositoryService;
 import org.pentaho.di.repository.IUser;
+import org.pentaho.di.repository.KettleAuthenticationException;
 import org.pentaho.di.repository.ObjectId;
 import org.pentaho.di.repository.ObjectRevision;
 import org.pentaho.di.repository.ReconnectableRepository;
@@ -1546,6 +1547,9 @@ public class PurRepository extends AbstractRepository implements Repository, Rec
     throws KettleException {
     try {
       return getObjectId( name, repositoryDirectory, RepositoryObjectType.JOB, false );
+    } catch ( KettleAuthenticationException kae ) {
+      // Re-throw authentication exceptions without wrapping
+      throw kae;
     } catch ( Exception e ) {
       String path = repositoryDirectory != null ? repositoryDirectory.toString() : "null";
       throw new IdNotFoundException( "Unable to get ID for job [" + name + "]", e, name, path,
@@ -1733,6 +1737,9 @@ public class PurRepository extends AbstractRepository implements Repository, Rec
     throws KettleException {
     try {
       return getObjectId( name, repositoryDirectory, RepositoryObjectType.TRANSFORMATION, false );
+    } catch ( KettleAuthenticationException kae ) {
+      // Re-throw authentication exceptions without wrapping
+      throw kae;
     } catch ( Exception e ) {
       String path = repositoryDirectory != null ? repositoryDirectory.toString() : "null";
       throw new IdNotFoundException( "Unable to get ID for job [" + name + "]", e, name, path,

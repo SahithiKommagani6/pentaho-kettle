@@ -103,11 +103,11 @@ public class SecurityController extends LazilyInitializedController implements I
         return false;
       }
     } catch ( Exception e ) {
-      if ( mainController == null || !mainController.handleLostRepository( e ) ) {
-        throw new RuntimeException( e );
-      }
-
-      return false;
+      retryOrThrow( e, () -> {
+        if ( !initService() ) {
+          throw new SecurityControllerException( "Service initialization failed on retry" );
+        }
+      } );
     }
 
     try {
@@ -118,9 +118,13 @@ public class SecurityController extends LazilyInitializedController implements I
       bf.setDocument( this.getXulDomContainer().getDocumentRoot() );
 
     } catch ( Exception e ) {
-      if ( mainController == null || !mainController.handleLostRepository( e ) ) {
-        throw new RuntimeException( e );
-      }
+      retryOrThrow( e, () -> {
+        managed = service.isManaged();
+        createModel();
+        messageBox = (XulMessageBox) document.createElement( "messagebox" );
+        bf = new SwtBindingFactory();
+        bf.setDocument( this.getXulDomContainer().getDocumentRoot() );
+      } );
     }
     if ( bf != null ) {
       createBindings();
@@ -142,12 +146,38 @@ public class SecurityController extends LazilyInitializedController implements I
         return false;
       }
     } catch ( Exception e ) {
-      throw new RuntimeException( e );
+      throw new SecurityControllerException( e );
     }
   }
 
   protected void setInitialDeck() {
     changeToUserDeck();
+  }
+
+  /**
+   * If the exception is a handled session expiry, retry the operation; otherwise rethrow.
+   */
+  private void retryOrThrow( Exception e, RunnableWithSecurityControllerException retryOperation ) {
+    if ( mainController != null && mainController.handleLostRepository( e ) ) {
+      try {
+        retryOperation.run();
+      } catch ( SecurityControllerException retryEx ) {
+        // If the retry itself triggers another session-expiry the reconnect dialog has
+        // already been shown (and the isHandlingSessionExpiry guard prevents a second one).
+        // Simply propagate so the caller can decide what to do — do NOT loop back into
+        // handleLostRepository again.
+        throw retryEx;
+      } catch ( Exception ex ) {
+        throw new RuntimeException( ex );
+      }
+    } else {
+      throw new SecurityControllerException( e );
+    }
+  }
+
+  @FunctionalInterface
+  private interface RunnableWithSecurityControllerException {
+    void run() throws Exception;
   }
 
   public XulMessageBox getMessageBox() {
@@ -218,7 +248,7 @@ public class SecurityController extends LazilyInitializedController implements I
     } catch ( Exception e ) {
       if ( mainController == null || !mainController.handleLostRepository( e ) ) {
         // convert to runtime exception so it bubbles up through the UI
-        throw new RuntimeException( e );
+        throw new SecurityControllerException( e );
       }
     }
   }

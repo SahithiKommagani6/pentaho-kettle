@@ -30,6 +30,8 @@ public class PurRepositoryMeta extends BaseRepositoryMeta implements RepositoryM
   private static final long serialVersionUID = -2456840196232185649L; /* EESOURCE: UPDATE SERIALVERUID */
 
   public static final String URL = "url";
+  public static final String AUTH_METHOD = "authMethod";
+  public static final String AUTH_METHOD_USERNAME_PASSWORD = "USERNAME_PASSWORD";
 
   /** The id as specified in the repository plugin meta, used for backward compatibility only */
   public static String REPOSITORY_TYPE_ID = "PentahoEnterpriseRepository";
@@ -37,6 +39,8 @@ public class PurRepositoryMeta extends BaseRepositoryMeta implements RepositoryM
   private PurRepositoryLocation repositoryLocation;
 
   private boolean versionCommentMandatory;
+  
+  private String authMethod;
 
   public PurRepositoryMeta() {
     super( REPOSITORY_TYPE_ID );
@@ -56,6 +60,7 @@ public class PurRepositoryMeta extends BaseRepositoryMeta implements RepositoryM
     retval.append( super.getXML() );
     retval.append( "    " ).append( XMLHandler.addTagValue( "repository_location_url", repositoryLocation.getUrl() ) );
     retval.append( "    " ).append( XMLHandler.addTagValue( "version_comment_mandatory", versionCommentMandatory ) );
+    retval.append( "    " ).append( XMLHandler.addTagValue( "auth_method", getAuthMethod() ) );
     retval.append( "  " ).append( XMLHandler.closeTag( XML_TAG ) );
 
     return retval.toString();
@@ -70,6 +75,11 @@ public class PurRepositoryMeta extends BaseRepositoryMeta implements RepositoryM
       this.repositoryLocation = new PurRepositoryLocation( urlTrim );
       this.versionCommentMandatory =
           "Y".equalsIgnoreCase( XMLHandler.getTagValue( repnode, "version_comment_mandatory" ) );
+      this.authMethod = XMLHandler.getTagValue( repnode, "auth_method" );
+      // Normalize null or blank/whitespace auth method to default for backward compatibility
+      if ( this.authMethod == null || this.authMethod.trim().isEmpty() ) {
+        this.authMethod = AUTH_METHOD_USERNAME_PASSWORD;
+      }
     } catch ( Exception e ) {
       throw new KettleException( "Unable to load Kettle database repository meta object", e );
     }
@@ -137,6 +147,19 @@ public class PurRepositoryMeta extends BaseRepositoryMeta implements RepositoryM
   public void setVersionCommentMandatory( boolean versionCommentMandatory ) {
     this.versionCommentMandatory = versionCommentMandatory;
   }
+  
+  public String getAuthMethod() {
+    return authMethod != null ? authMethod : AUTH_METHOD_USERNAME_PASSWORD;
+  }
+  
+  public void setAuthMethod( String authMethod ) {
+    // Normalize null or blank/whitespace auth method to default
+    if ( authMethod == null || authMethod.trim().isEmpty() ) {
+      this.authMethod = AUTH_METHOD_USERNAME_PASSWORD;
+    } else {
+      this.authMethod = authMethod;
+    }
+  }
 
   public RepositoryMeta clone() {
     return new PurRepositoryMeta( REPOSITORY_TYPE_ID, getName(), getDescription(), getRepositoryLocation(),
@@ -148,12 +171,15 @@ public class PurRepositoryMeta extends BaseRepositoryMeta implements RepositoryM
     String url = (String) properties.get( URL );
     PurRepositoryLocation purRepositoryLocation = new PurRepositoryLocation( url );
     setRepositoryLocation( purRepositoryLocation );
+    String authMethodValue = (String) properties.get( AUTH_METHOD );
+    setAuthMethod( authMethodValue );
   }
 
   @SuppressWarnings( "unchecked" )
   @Override public JSONObject toJSONObject() {
     JSONObject object = super.toJSONObject();
     object.put( URL, getRepositoryLocation().getUrl() );
+    object.put( AUTH_METHOD, getAuthMethod() );
     return object;
   }
 }

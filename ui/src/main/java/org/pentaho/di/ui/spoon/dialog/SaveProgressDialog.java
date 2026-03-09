@@ -23,6 +23,7 @@ import org.eclipse.swt.widgets.Shell;
 import org.pentaho.di.core.EngineMetaInterface;
 import org.pentaho.di.core.ProgressMonitorAdapter;
 import org.pentaho.di.core.exception.KettleException;
+import org.pentaho.di.core.logging.LogChannel;
 import org.pentaho.di.i18n.BaseMessages;
 import org.pentaho.di.repository.Repository;
 import org.pentaho.di.ui.core.dialog.ErrorDialog;
@@ -59,6 +60,14 @@ public class SaveProgressDialog {
     IRunnableWithProgress op = new IRunnableWithProgress() {
       public void run( IProgressMonitor monitor ) throws InvocationTargetException, InterruptedException {
         try {
+          
+          // Check if directory is root or invalid after session reconnection
+          if ( meta.getRepositoryDirectory() == null ||
+               "/".equals( meta.getRepositoryDirectory().getPath() ) ||
+               meta.getRepositoryDirectory().getPath() == null ) {
+            updateRepositoryDirectoryIfNeeded();
+          }
+          
           rep.save( meta, versionComment, new ProgressMonitorAdapter( monitor ) );
         } catch ( KettleException e ) {
           throw new InvocationTargetException( e, BaseMessages.getString(
@@ -86,5 +95,19 @@ public class SaveProgressDialog {
     }
 
     return retval;
+  }
+
+  /**
+   * Safely updates the repository directory to the default save directory.
+   * This is needed after session reconnection when the directory may be root or invalid.
+   * If the update fails, logs a debug message and continues.
+   */
+  private void updateRepositoryDirectoryIfNeeded() {
+    try {
+      rep.loadRepositoryDirectoryTree();
+      meta.setRepositoryDirectory( rep.getDefaultSaveDirectory( meta ) );
+    } catch ( Exception de ) {
+      LogChannel.GENERAL.logDebug( "SaveProgressDialog: Failed to update directory: " + de.getMessage() );
+    }
   }
 }

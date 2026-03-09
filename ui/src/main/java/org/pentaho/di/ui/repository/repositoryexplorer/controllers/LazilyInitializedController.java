@@ -15,8 +15,11 @@ package org.pentaho.di.ui.repository.repositoryexplorer.controllers;
 
 import org.eclipse.swt.custom.BusyIndicator;
 import org.eclipse.swt.widgets.Display;
+import org.pentaho.di.core.logging.LogChannel;
+import org.pentaho.di.core.logging.LogChannelInterface;
 import org.pentaho.di.i18n.BaseMessages;
 import org.pentaho.di.repository.Repository;
+import org.pentaho.di.ui.repository.exception.RepositoryExceptionUtils;
 import org.pentaho.di.ui.repository.repositoryexplorer.ControllerInitializationException;
 import org.pentaho.di.ui.repository.repositoryexplorer.RepositoryExplorer;
 import org.pentaho.ui.xul.XulException;
@@ -26,6 +29,7 @@ import org.pentaho.ui.xul.impl.AbstractXulEventHandler;
 public abstract class LazilyInitializedController extends AbstractXulEventHandler {
 
   private static Class<?> PKG = RepositoryExplorer.class; // for i18n purposes, needed by Translator2!!
+  private static final LogChannelInterface log = LogChannel.GENERAL;
 
   protected Repository repository;
 
@@ -45,9 +49,44 @@ public abstract class LazilyInitializedController extends AbstractXulEventHandle
           showErrorDialog( null );
         }
       } catch ( Exception e ) {
-        e.printStackTrace();
-        showErrorDialog( e );
+        if ( RepositoryExceptionUtils.isSessionExpired( e ) ) {
+          handleSessionExpiry( e );
+        } else {
+          log.logError( "Error during lazy initialization", e );
+          showErrorDialog( e );
+        }
       }
+    }
+  }
+
+  /**
+   * Handles session expiry by delegating to MainController.
+   * If reconnection succeeds, retries doLazyInit() and marks the controller as
+   * initialized so subsequent tab clicks do not re-enter the init loop.
+   */
+  protected void handleSessionExpiry( Exception e ) {
+    try {
+      MainController mainController = (MainController) this.getXulDomContainer().getEventHandler( "mainController" );
+      if ( mainController != null && mainController.handleSessionExpiry( e ) ) {
+        // Reconnection succeeded — retry initialization with the fresh session.
+        retryLazyInitAfterSessionRecovery();
+      }
+    } catch ( Exception handleException ) {
+      log.logError( "Failed to get MainController for session expiry handling", handleException );
+    }
+  }
+
+  /**
+   * Retries doLazyInit() after session recovery and updates initialized flag.
+   */
+  private void retryLazyInitAfterSessionRecovery() {
+    try {
+      if ( doLazyInit() ) {
+        initialized = true;
+      }
+    } catch ( Exception retryEx ) {
+      log.logError( "Failed to re-initialize after session recovery", retryEx );
+      showErrorDialog( retryEx );
     }
   }
 
